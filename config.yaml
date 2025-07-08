@@ -1,0 +1,9 @@
+backup_base: /path/to/your/target
+watch_dirs:
+  - /path/to/your/source1
+  - /path/to/your/source2
+ignore_patterns:
+  - ".DS_Store"
+  - "Thumbs.db"
+  - "*.swp"
+  - "*~"
