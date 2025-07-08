@@ -26,7 +26,19 @@ func main() {
 }
 
 func run() int {
-	err := loadConfig("config.yaml")
+	logFile, err := os.OpenFile("./go-auto-file-backup.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		log.Println("failed to open log file, ", err)
+	}
+	defer func() {
+		err := logFile.Close()
+		if err != nil {
+			log.Println("failed to close log file, ", err)
+		}
+	}()
+	log.SetOutput(io.MultiWriter(logFile, os.Stdout))
+
+	err = loadConfig("config.yaml")
 	if err != nil {
 		log.Println("failed to load config:", err)
 		return 1
