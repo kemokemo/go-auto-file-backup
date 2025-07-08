@@ -37,7 +37,12 @@ func run() int {
 		log.Println("failed to create watcher:", err)
 		return 1
 	}
-	defer watcher.Close()
+	defer func() {
+		err := watcher.Close()
+		if err != nil {
+			log.Println("failed to close watcher, ", err)
+		}
+	}()
 
 	for _, dir := range config.WatchDirs {
 		if err := watcher.Add(dir); err != nil {
@@ -88,7 +93,10 @@ func loadConfig(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		err := f.Close()
+		log.Println("failed to close config file, ", err)
+	}()
 
 	decoder := yaml.NewDecoder(f)
 	return decoder.Decode(&config)
@@ -133,13 +141,23 @@ func backup(srcPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open source file, %v", err)
 	}
-	defer srcFile.Close()
+	defer func() {
+		err := srcFile.Close()
+		if err != nil {
+			log.Println("failed to close src file, ", err)
+		}
+	}()
 
 	destFile, err := os.Create(destPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to create destination file, %v", err)
 	}
-	defer destFile.Close()
+	defer func() {
+		err := destFile.Close()
+		if err != nil {
+			log.Println("failed to close destination file, ", err)
+		}
+	}()
 
 	if _, err := io.Copy(destFile, srcFile); err != nil {
 		return "", fmt.Errorf("failed to copy file, %v", err)
