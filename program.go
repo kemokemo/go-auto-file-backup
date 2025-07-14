@@ -1,0 +1,185 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/kardianos/service"
+	"gopkg.in/yaml.v3"
+)
+
+type Config struct {
+	BackupBase     string   `yaml:"backup_base"`
+	WatchDirs      []string `yaml:"watch_dirs"`
+	IgnorePatterns []string `yaml:"ignore_patterns"`
+}
+
+var config Config
+
+type program struct{}
+
+var done chan interface{}
+
+func (p *program) Start(s service.Service) error {
+	// Start should not block. Do the actual work async.
+	done = make(chan interface{})
+	go p.run()
+	return nil
+}
+
+func (p *program) run() {
+	// Do work here
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Println("failed to get current exe path, ", err)
+		return
+	}
+
+	configPath := filepath.Join(filepath.Dir(exePath), "config.yaml")
+
+	err = loadConfig(configPath)
+	if err != nil {
+		log.Println("failed to load config:", err)
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Println("failed to create watcher:", err)
+	}
+	defer func() {
+		err := watcher.Close()
+		if err != nil {
+			log.Println("failed to close watcher, ", err)
+		}
+	}()
+
+	for _, dir := range config.WatchDirs {
+		if err := watcher.Add(dir); err != nil {
+			log.Printf("failed to watch directory [%s]: %v\n", dir, err)
+		}
+		log.Println("Watching:", dir)
+	}
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Op&(fsnotify.Create|fsnotify.Write) != 0 {
+				if shouldIgnore(event.Name) {
+					log.Println("Ignored:", event.Name)
+					continue
+				}
+
+				log.Println("Detected change:", event.Name)
+				dstPath, err := backup(event.Name)
+				if err != nil {
+					log.Printf("failed to backup [%s]: %v\n", event.Name, err)
+				} else {
+					log.Println("Backup completed:", dstPath)
+				}
+			}
+
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Println("failed to read events:", err)
+
+		case <-done:
+			log.Println("Stopped this service")
+			return
+		}
+	}
+}
+
+func (p *program) Stop(s service.Service) error {
+	// Stop should not block. Return with a few seconds.
+	done <- 0
+	return nil
+}
+
+func loadConfig(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err := f.Close()
+		log.Println("failed to close config file, ", err)
+	}()
+
+	decoder := yaml.NewDecoder(f)
+	return decoder.Decode(&config)
+}
+
+func shouldIgnore(path string) bool {
+	filename := filepath.Base(path)
+	for _, pattern := range config.IgnorePatterns {
+		match, err := filepath.Match(pattern, filename)
+		if err == nil && match {
+			return true
+		}
+	}
+	return false
+}
+
+func backup(srcPath string) (string, error) {
+	now := time.Now().Format("2006-01-02_15-04-05")
+
+	var baseDir string
+	for _, dir := range config.WatchDirs {
+		if rel, err := filepath.Rel(dir, srcPath); err == nil && !strings.HasPrefix(rel, "..") {
+			baseDir = dir
+			break
+		}
+	}
+	if baseDir == "" {
+		return "", fmt.Errorf("failed to determine base directory, %v", os.ErrNotExist)
+	}
+
+	relPath, err := filepath.Rel(baseDir, srcPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve relative path, %v", err)
+	}
+
+	destPath := filepath.Join(config.BackupBase, now, relPath)
+	if err := os.MkdirAll(filepath.Dir(destPath), os.ModePerm); err != nil {
+		return "", fmt.Errorf("failed to create backup directory, %v", err)
+	}
+
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open source file, %v", err)
+	}
+	defer func() {
+		err := srcFile.Close()
+		if err != nil {
+			log.Println("failed to close src file, ", err)
+		}
+	}()
+
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create destination file, %v", err)
+	}
+	defer func() {
+		err := destFile.Close()
+		if err != nil {
+			log.Println("failed to close destination file, ", err)
+		}
+	}()
+
+	if _, err := io.Copy(destFile, srcFile); err != nil {
+		return "", fmt.Errorf("failed to copy file, %v", err)
+	}
+
+	return destPath, nil
+}
