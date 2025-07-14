@@ -8,8 +8,6 @@ import (
 	"github.com/kardianos/service"
 )
 
-var logger service.Logger
-
 func main() {
 	os.Exit(run())
 }
@@ -40,15 +38,9 @@ func run() int {
 		return 1
 	}
 
-	logger, err = s.Logger(nil)
-	if err != nil {
-		log.Println("failed to get service logger, ", err)
-		return 1
-	}
-
 	err = s.Run()
 	if err != nil {
-		logger.Error(err)
+		log.Println("failed to run service, ", err)
 		return 1
 	}
 
