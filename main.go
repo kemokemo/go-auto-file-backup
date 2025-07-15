@@ -3,9 +3,17 @@ package main
 import (
 	"io"
 	"log"
+	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/kardianos/service"
+	"gopkg.in/yaml.v3"
+)
+
+var (
+	logger  *slog.Logger
+	sLogger service.Logger
 )
 
 func main() {
@@ -13,7 +21,14 @@ func main() {
 }
 
 func run() int {
-	logFile, err := os.OpenFile("./go-auto-file-backup.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Println("failed to get current exe path, ", err)
+		return 1
+	}
+
+	logPath := filepath.Join(filepath.Dir(exePath), "go-auto-file-backup.log")
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Println("failed to open log file, ", err)
 	}
@@ -23,7 +38,16 @@ func run() int {
 			log.Println("failed to close log file, ", err)
 		}
 	}()
-	log.SetOutput(io.MultiWriter(logFile, os.Stdout))
+	logger = slog.New(slog.NewJSONHandler(io.MultiWriter(logFile, os.Stdout), &slog.HandlerOptions{
+		Level:     slog.LevelInfo,
+		AddSource: true, // ソースコードの位置情報も含める
+	}))
+
+	configPath := filepath.Join(filepath.Dir(exePath), "config.yaml")
+	config, err := loadConfig(configPath)
+	if err != nil {
+		logger.Error("failed to load config, ", slog.String("error", err.Error()))
+	}
 
 	svcConfig := &service.Config{
 		Name:        "GoAutoBackup",
@@ -31,18 +55,48 @@ func run() int {
 		Description: "This is a Go service to backup file automatically.",
 	}
 
-	prg := &program{}
+	prg := &program{config: config}
 	s, err := service.New(prg, svcConfig)
 	if err != nil {
-		log.Println("failed to create new service, ", err)
+		logger.Error("failed to create new service", slog.String("error", err.Error()))
+		return 1
+	}
+
+	sLogger, err = s.Logger(nil)
+	if err != nil {
+		logger.Error("failed to get a service logger", slog.String("error", err.Error()))
 		return 1
 	}
 
 	err = s.Run()
 	if err != nil {
 		log.Println("failed to run service, ", err)
+		err = sLogger.Errorf("Service stopped with error, %v", err)
+		if err != nil {
+			logger.Error("failed to record the service ended error, ", slog.String("error", err.Error()))
+		}
 		return 1
 	}
 
 	return 0
+}
+
+func loadConfig(path string) (Config, error) {
+	var config Config
+
+	f, err := os.Open(path)
+	if err != nil {
+		return config, err
+	}
+	defer func() {
+		err := f.Close()
+		if err != nil {
+			logger.Error("failed to close config file, ", slog.String("error", err.Error()))
+		}
+	}()
+
+	decoder := yaml.NewDecoder(f)
+	err = decoder.Decode(&config)
+
+	return config, err
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/kardianos/service"
-	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -20,11 +20,11 @@ type Config struct {
 	IgnorePatterns []string `yaml:"ignore_patterns"`
 }
 
-var config Config
+type program struct {
+	config Config
+}
 
-type program struct{}
-
-var done chan interface{}
+var done chan any
 
 func (p *program) Start(s service.Service) error {
 	// Start should not block. Do the actual work async.
@@ -33,37 +33,35 @@ func (p *program) Start(s service.Service) error {
 	return nil
 }
 
+func (p *program) Stop(s service.Service) error {
+	// Stop should not block. Return with a few seconds.
+	done <- 0
+	return nil
+}
+
 func (p *program) run() {
 	// Do work here
-	exePath, err := os.Executable()
-	if err != nil {
-		log.Println("failed to get current exe path, ", err)
-		return
-	}
-
-	configPath := filepath.Join(filepath.Dir(exePath), "config.yaml")
-
-	err = loadConfig(configPath)
-	if err != nil {
-		log.Println("failed to load config:", err)
-	}
-
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Println("failed to create watcher:", err)
+		logger.Error("failed to create watcher:", slog.String("error", err.Error()))
 	}
 	defer func() {
 		err := watcher.Close()
 		if err != nil {
-			log.Println("failed to close watcher, ", err)
+			logger.Error("failed to close watcher, ", slog.String("error", err.Error()))
 		}
 	}()
 
-	for _, dir := range config.WatchDirs {
+	for _, dir := range p.config.WatchDirs {
 		if err := watcher.Add(dir); err != nil {
-			log.Printf("failed to watch directory [%s]: %v\n", dir, err)
+			logger.Error("failed to watch directory [%s]: %v\n", slog.String("error", err.Error()))
 		}
-		log.Println("Watching:", dir)
+		logger.Info("Watching", slog.String("dir", dir))
+	}
+
+	err = sLogger.Infof("Service started.\n - backup_base: %v", p.config.BackupBase)
+	if err != nil {
+		logger.Error("failed to record service started info, ", slog.String("error", err.Error()))
 	}
 
 	for {
@@ -73,17 +71,17 @@ func (p *program) run() {
 				return
 			}
 			if event.Op&(fsnotify.Create|fsnotify.Write) != 0 {
-				if shouldIgnore(event.Name) {
-					log.Println("Ignored:", event.Name)
+				if p.shouldIgnore(event.Name) {
+					logger.Info("Ignored", slog.String("EventName", event.Name))
 					continue
 				}
 
 				log.Println("Detected change:", event.Name)
-				dstPath, err := backup(event.Name)
+				dstPath, err := p.backup(event.Name)
 				if err != nil {
-					log.Printf("failed to backup [%s]: %v\n", event.Name, err)
+					logger.Error("failed to backup [%s]: %v\n", slog.String("EventName", event.Name), slog.String("error", err.Error()))
 				} else {
-					log.Println("Backup completed:", dstPath)
+					logger.Info("Backup completed", slog.String("DestinationPath", dstPath))
 				}
 			}
 
@@ -91,38 +89,23 @@ func (p *program) run() {
 			if !ok {
 				return
 			}
-			log.Println("failed to read events:", err)
+			logger.Error("failed to read events", slog.String("error", err.Error()))
 
 		case <-done:
-			log.Println("Stopped this service")
+			logger.Info("Stopped stopped.")
+
+			err = sLogger.Infof("Service stopped successfully.")
+			if err != nil {
+				logger.Error("failed to record service stopped info, ", slog.String("error", err.Error()))
+			}
 			return
 		}
 	}
 }
 
-func (p *program) Stop(s service.Service) error {
-	// Stop should not block. Return with a few seconds.
-	done <- 0
-	return nil
-}
-
-func loadConfig(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		err := f.Close()
-		log.Println("failed to close config file, ", err)
-	}()
-
-	decoder := yaml.NewDecoder(f)
-	return decoder.Decode(&config)
-}
-
-func shouldIgnore(path string) bool {
+func (p *program) shouldIgnore(path string) bool {
 	filename := filepath.Base(path)
-	for _, pattern := range config.IgnorePatterns {
+	for _, pattern := range p.config.IgnorePatterns {
 		match, err := filepath.Match(pattern, filename)
 		if err == nil && match {
 			return true
@@ -131,11 +114,11 @@ func shouldIgnore(path string) bool {
 	return false
 }
 
-func backup(srcPath string) (string, error) {
+func (p *program) backup(srcPath string) (string, error) {
 	now := time.Now().Format("2006-01-02_15-04-05")
 
 	var baseDir string
-	for _, dir := range config.WatchDirs {
+	for _, dir := range p.config.WatchDirs {
 		if rel, err := filepath.Rel(dir, srcPath); err == nil && !strings.HasPrefix(rel, "..") {
 			baseDir = dir
 			break
@@ -150,7 +133,7 @@ func backup(srcPath string) (string, error) {
 		return "", fmt.Errorf("failed to resolve relative path, %v", err)
 	}
 
-	destPath := filepath.Join(config.BackupBase, now, relPath)
+	destPath := filepath.Join(p.config.BackupBase, now, relPath)
 	if err := os.MkdirAll(filepath.Dir(destPath), os.ModePerm); err != nil {
 		return "", fmt.Errorf("failed to create backup directory, %v", err)
 	}
