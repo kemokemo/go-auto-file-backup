@@ -11,10 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var (
-	logger  *slog.Logger
-	sLogger service.Logger
-)
+var logger *slog.Logger
 
 func main() {
 	os.Exit(run())
@@ -46,7 +43,7 @@ func run() int {
 	configPath := filepath.Join(filepath.Dir(exePath), "config.yaml")
 	config, err := loadConfig(configPath)
 	if err != nil {
-		logger.Error("failed to load config, ", slog.String("error", err.Error()))
+		logger.Error("failed to load config, ", "error", err)
 	}
 
 	svcConfig := &service.Config{
@@ -58,23 +55,13 @@ func run() int {
 	prg := &program{config: config}
 	s, err := service.New(prg, svcConfig)
 	if err != nil {
-		logger.Error("failed to create new service", slog.String("error", err.Error()))
-		return 1
-	}
-
-	sLogger, err = s.Logger(nil)
-	if err != nil {
-		logger.Error("failed to get a service logger", slog.String("error", err.Error()))
+		logger.Error("failed to create new service", "error", err)
 		return 1
 	}
 
 	err = s.Run()
 	if err != nil {
-		log.Println("failed to run service, ", err)
-		err = sLogger.Errorf("Service stopped with error, %v", err)
-		if err != nil {
-			logger.Error("failed to record the service ended error, ", slog.String("error", err.Error()))
-		}
+		logger.Error("failed to run service, ", "error", err)
 		return 1
 	}
 
@@ -91,7 +78,7 @@ func loadConfig(path string) (Config, error) {
 	defer func() {
 		err := f.Close()
 		if err != nil {
-			logger.Error("failed to close config file, ", slog.String("error", err.Error()))
+			logger.Error("failed to close config file, ", "error", err)
 		}
 	}()
 
