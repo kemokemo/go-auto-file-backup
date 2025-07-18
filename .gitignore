@@ -2,3 +2,4 @@
 dist/
 *.log
 *.exe
+go-auto-file-backup

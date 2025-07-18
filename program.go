@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,26 +41,24 @@ func (p *program) run() {
 	// Do work here
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		logger.Error("failed to create watcher:", slog.String("error", err.Error()))
+		logger.Error("failed to create watcher:", "error", err)
 	}
 	defer func() {
 		err := watcher.Close()
 		if err != nil {
-			logger.Error("failed to close watcher, ", slog.String("error", err.Error()))
+			logger.Error("failed to close watcher, ", "error", err)
 		}
 	}()
 
 	for _, dir := range p.config.WatchDirs {
 		if err := watcher.Add(dir); err != nil {
-			logger.Error("failed to watch directory [%s]: %v\n", slog.String("error", err.Error()))
+			logger.Error("failed to watch directory.", "directory", dir, "error", err)
+		} else {
+			logger.Info("Watching..", "directory", dir)
 		}
-		logger.Info("Watching", slog.String("dir", dir))
 	}
 
-	err = sLogger.Infof("Service started.\n - backup_base: %v", p.config.BackupBase)
-	if err != nil {
-		logger.Error("failed to record service started info, ", slog.String("error", err.Error()))
-	}
+	logger.Info("Service started.", "backup_base", p.config.BackupBase)
 
 	for {
 		select {
@@ -72,16 +68,16 @@ func (p *program) run() {
 			}
 			if event.Op&(fsnotify.Create|fsnotify.Write) != 0 {
 				if p.shouldIgnore(event.Name) {
-					logger.Info("Ignored", slog.String("EventName", event.Name))
+					logger.Info("Ignored", "EventName", event.Name)
 					continue
 				}
 
-				log.Println("Detected change:", event.Name)
+				logger.Info("Detected change", "EventName", event.Name)
 				dstPath, err := p.backup(event.Name)
 				if err != nil {
-					logger.Error("failed to backup [%s]: %v\n", slog.String("EventName", event.Name), slog.String("error", err.Error()))
+					logger.Error("failed to backup", "EventName", event.Name, "error", err)
 				} else {
-					logger.Info("Backup completed", slog.String("DestinationPath", dstPath))
+					logger.Info("Backup completed", "DestinationPath", dstPath)
 				}
 			}
 
@@ -89,15 +85,10 @@ func (p *program) run() {
 			if !ok {
 				return
 			}
-			logger.Error("failed to read events", slog.String("error", err.Error()))
+			logger.Error("failed to read events", "error", err)
 
 		case <-done:
-			logger.Info("Stopped stopped.")
-
-			err = sLogger.Infof("Service stopped successfully.")
-			if err != nil {
-				logger.Error("failed to record service stopped info, ", slog.String("error", err.Error()))
-			}
+			logger.Info("Service stopped.")
 			return
 		}
 	}
@@ -145,7 +136,7 @@ func (p *program) backup(srcPath string) (string, error) {
 	defer func() {
 		err := srcFile.Close()
 		if err != nil {
-			log.Println("failed to close src file, ", err)
+			logger.Error("failed to close src file", "error", err)
 		}
 	}()
 
@@ -156,7 +147,7 @@ func (p *program) backup(srcPath string) (string, error) {
 	defer func() {
 		err := destFile.Close()
 		if err != nil {
-			log.Println("failed to close destination file, ", err)
+			logger.Error("failed to close destination file", "error", err)
 		}
 	}()
 
